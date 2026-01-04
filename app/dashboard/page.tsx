@@ -3,9 +3,8 @@ import { useEffect, useState, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useRouter } from 'next/navigation';
-import { LogOut, Settings, MessageSquare, Upload, Share2, MapPin, Smartphone, Plus, BarChart2, Globe, ShieldAlert, Download, X, Loader2 } from 'lucide-react';
+import { LogOut, Settings, MessageSquare, Upload, Share2, MapPin, Smartphone, Plus, BarChart2, Globe, ShieldAlert, Download, X, Loader2, Check } from 'lucide-react';
 
-// ... (翻譯字典保持不變，省略以節省空間) ...
 const translations = {
   zh: {
     title: '控制台',
@@ -86,9 +85,12 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<'inbox' | 'forms' | 'profile'>('inbox');
   const [revealedMsg, setRevealedMsg] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  
+  // 上傳狀態
   const [uploadProgress, setUploadProgress] = useState(0); 
   const [isUploading, setIsUploading] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  
   const fileInputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
 
@@ -119,32 +121,49 @@ export default function Dashboard() {
   const handleAvatarUpload = async (e: any) => {
     if (!e.target.files || !e.target.files[0]) return;
     const file = e.target.files[0];
-    const filePath = `${user.username}-${Date.now()}.${file.name.split('.').pop()}`;
+    const fileExt = file.name.split('.').pop();
+    const filePath = `${user.username}-${Date.now()}.${fileExt}`;
     
     setIsUploading(true);
     setUploadProgress(0);
 
+    // 模擬真實感進度條 (跑得比較慢，才不會一下就卡在 90%)
     const progressInterval = setInterval(() => {
         setUploadProgress(prev => {
-            if (prev >= 90) return prev;
-            return prev + 10;
+            if (prev >= 95) return prev; // 卡在 95% 等待後端回應
+            // 隨機增加 1~10%，模擬網路波動
+            return prev + Math.floor(Math.random() * 10);
         });
-    }, 100);
+    }, 300);
 
-    await supabase.storage.from('avatars').upload(filePath, file);
-    
-    clearInterval(progressInterval);
-    setUploadProgress(100);
+    try {
+        // 1. 上傳到 Supabase
+        const { error: uploadError } = await supabase.storage.from('avatars').upload(filePath, file);
+        if (uploadError) throw uploadError;
 
-    const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(filePath);
-    await supabase.from('profiles').update({ avatar_url: publicUrl }).eq('id', user.id);
-    setUser({ ...user, avatar_url: publicUrl });
-    
-    setTimeout(() => {
+        // 2. 獲取連結
+        const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(filePath);
+        
+        // 3. 更新資料庫
+        const { error: updateError } = await supabase.from('profiles').update({ avatar_url: publicUrl }).eq('id', user.id);
+        if (updateError) throw updateError;
+
+        // 成功！
+        clearInterval(progressInterval);
+        setUploadProgress(100);
+        
+        // 讓 100% 顯示一下下再消失
+        setTimeout(() => {
+            setUser({ ...user, avatar_url: publicUrl });
+            setIsUploading(false);
+            setUploadProgress(0);
+        }, 800);
+
+    } catch (error: any) {
+        clearInterval(progressInterval);
         setIsUploading(false);
-        setUploadProgress(0);
-        alert(lang === 'zh' ? '頭像已更新！' : 'Avatar Updated!');
-    }, 500);
+        alert('Upload Error: ' + error.message);
+    }
   };
 
   const createPoll = async () => {
@@ -168,38 +187,28 @@ export default function Dashboard() {
       setTimeout(() => setCopied(false), 2000);
   };
 
-  // 🔴 修正這裡：生成預覽圖時，改為只傳遞 username，讓後端固定文字
   const handleGeneratePreview = () => {
-      // 這裡不再傳遞 text="Ask me...", 而是傳遞 username
       const url = `/api/og?username=${user.username}`;
       setPreviewUrl(url);
   };
 
   const handleNativeShare = async () => {
       if (!previewUrl) return;
-      
       const shareData = {
           title: 'Velvet',
-          text: '來秘密留言給我！ Ask me anything anonymous.',
+          text: 'Ask me anything anonymous.',
           url: `${window.location.origin}/${user.username}`
       };
-
       try {
           const blob = await fetch(previewUrl).then(r => r.blob());
           const file = new File([blob], 'velvet-promo.png', { type: 'image/png' });
-
           if (navigator.share && navigator.canShare({ files: [file] })) {
-              await navigator.share({
-                  files: [file],
-                  title: 'Velvet',
-                  text: shareData.text,
-                  url: shareData.url
-              });
+              await navigator.share({ files: [file], title: 'Velvet', text: shareData.text, url: shareData.url });
           } else if (navigator.share) {
               await navigator.share(shareData);
           } else {
               copyLink();
-              alert('Link copied (Share not supported)');
+              alert('Link copied');
           }
       } catch (err) { console.log(err); }
   };
@@ -253,7 +262,6 @@ export default function Dashboard() {
                             className="bg-zinc-900/50 border border-white/5 p-5 rounded-2xl hover:border-pink-500/20 transition-colors"
                         >
                             <p className="text-xl font-medium mb-6 leading-relaxed">"{msg.content}"</p>
-                            
                             {revealedMsg === msg.id ? (
                                 <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="bg-black/50 p-4 rounded-xl text-sm space-y-2 overflow-hidden border border-pink-500/30">
                                     <div className="flex items-center gap-2 text-pink-400 font-bold"><MapPin size={14}/> {msg.location_info || t.inbox.unknownLoc}</div>
@@ -264,7 +272,6 @@ export default function Dashboard() {
                                 <div className="flex justify-between items-center mt-4">
                                     <span className="text-xs text-zinc-600">{new Date(msg.created_at).toLocaleDateString()}</span>
                                     <div className="flex gap-2">
-                                        {/* 這裡用於訊息分享，我們還是用 text 參數 */}
                                         <button onClick={() => window.open(`/api/og?text=${encodeURIComponent(msg.content)}`, '_blank')} className="p-2 bg-white/5 rounded-lg text-zinc-400 hover:text-white">
                                             <Share2 size={14}/>
                                         </button>
@@ -304,7 +311,6 @@ export default function Dashboard() {
                         {t.forms.launch}
                     </button>
                 </div>
-
                 <div className="space-y-4">
                     {polls.map(poll => (
                         <div key={poll.id} className="bg-zinc-900/40 p-5 rounded-2xl border border-white/5 flex justify-between items-center">
@@ -325,21 +331,34 @@ export default function Dashboard() {
 
         {activeTab === 'profile' && (
             <div className="space-y-6 max-w-xl mx-auto">
-                
                 <div className="bg-zinc-900 p-8 rounded-[2rem] flex items-center gap-6 border border-white/5 shadow-2xl relative overflow-hidden">
                     <div className="absolute top-0 right-0 p-32 bg-pink-600/20 blur-[60px] rounded-full pointer-events-none"/>
                     
+                    {/* 頭像與進度條區塊 */}
                     <div className="relative w-24 h-24 flex-shrink-0 group cursor-pointer" onClick={() => !isUploading && fileInputRef.current?.click()}>
                         <div className="w-full h-full rounded-full p-[2px] bg-gradient-to-tr from-pink-500 to-indigo-500">
-                            <img src={user?.avatar_url || `https://api.dicebear.com/7.x/shapes/svg?seed=${user.username}`} className={`w-full h-full rounded-full object-cover bg-black ${isUploading ? 'opacity-50' : ''}`} />
+                            <img 
+                                src={user?.avatar_url || `https://api.dicebear.com/7.x/shapes/svg?seed=${user.username}`} 
+                                className={`w-full h-full rounded-full object-cover bg-black transition-opacity ${isUploading ? 'opacity-30' : ''}`} 
+                            />
                         </div>
+                        
+                        {/* 上傳中的遮罩與進度 */}
                         {isUploading ? (
-                            <div className="absolute inset-0 flex items-center justify-center">
-                                <Loader2 className="animate-spin text-white" />
+                            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/50 rounded-full z-10">
+                                <Loader2 className="animate-spin text-white w-6 h-6 mb-1" />
+                                <span className="text-[10px] font-bold text-white">{uploadProgress}%</span>
                             </div>
                         ) : (
                             <div className="absolute inset-0 bg-black/60 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                                 <Upload size={20}/>
+                            </div>
+                        )}
+                        
+                        {/* 上傳成功的勾勾 */}
+                        {uploadProgress === 100 && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-green-500/80 rounded-full z-20">
+                                <Check className="text-white w-8 h-8" />
                             </div>
                         )}
                     </div>
@@ -348,7 +367,6 @@ export default function Dashboard() {
                     
                     <div className="z-10 flex-1">
                         <h2 className="text-2xl font-bold mb-1">@{user.username}</h2>
-                        
                         {user.username === 'admin' ? (
                             <div className="inline-flex items-center gap-1 bg-red-500/20 text-red-500 text-xs font-bold px-2 py-1 rounded-md border border-red-500/30">
                                 <ShieldAlert size={12}/> {t.profile.adminType}
@@ -356,22 +374,14 @@ export default function Dashboard() {
                         ) : (
                             <p className="text-sm text-zinc-500">{t.profile.userType}</p>
                         )}
-
-                        {isUploading && (
-                            <div className="mt-3 w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
-                                <motion.div 
-                                    className="bg-pink-500 h-full rounded-full" 
-                                    initial={{ width: 0 }} 
-                                    animate={{ width: `${uploadProgress}%` }}
-                                />
-                            </div>
-                        )}
+                        
+                        {/* 文字進度提示 */}
+                        {isUploading && <p className="text-xs text-pink-500 mt-2 animate-pulse">Compressing & Uploading...</p>}
                     </div>
                 </div>
 
                 <div className="bg-gradient-to-br from-pink-900/20 to-indigo-900/20 p-6 rounded-[2rem] border border-pink-500/20">
                     <h3 className="font-bold text-pink-300 mb-4 flex items-center gap-2"><Share2 size={18}/> {t.profile.promote}</h3>
-                    
                     <div className="flex gap-2 mb-4">
                         <code className="flex-1 bg-black/40 p-4 rounded-xl text-pink-400 font-mono text-sm overflow-hidden text-ellipsis whitespace-nowrap border border-white/5">
                             {window.location.origin}/{user.username}
@@ -380,7 +390,6 @@ export default function Dashboard() {
                             {copied ? t.profile.copied : t.profile.copy}
                         </button>
                     </div>
-
                     <AnimatePresence>
                         {previewUrl && (
                             <motion.div 
@@ -399,7 +408,6 @@ export default function Dashboard() {
                             </motion.div>
                         )}
                     </AnimatePresence>
-
                     {previewUrl ? (
                          <div className="grid grid-cols-2 gap-3">
                              <button onClick={handleNativeShare} className="py-4 bg-pink-600 rounded-xl font-bold text-sm flex items-center justify-center gap-2 hover:bg-pink-500 transition-colors">
